@@ -43,13 +43,17 @@ public class CommandArticles(IAppDbContext context, ICurrentUser currentUser, IS
     {
         await createValidator.ValidateAndThrowAsync(newArticle, cancellationToken);
 
+        // Internal refactor (signature unchanged, behaviour identical): compute the
+        // slug into a local before constructing the entity.
+        var slug = slugifier.Generate(newArticle.Title);
+
         var article = new Article
         {
             Title = newArticle.Title,
             Description = newArticle.Description,
             Body = newArticle.Body,
             Author = currentUser.User!,
-            Slug = slugifier.Generate(newArticle.Title)
+            Slug = slug
         };
 
         if (newArticle.TagList.Count > 0)
