@@ -1,0 +1,15 @@
+{
+  "body": {
+    "user": {
+      "bio": null,
+      "email": "golden@example.com",
+      "image": null,
+      "token": "<masked>",
+      "username": "goldenuser"
+    }
+  },
+  "id": "register",
+  "method": "POST",
+  "path": "/users",
+  "status": 200
+}

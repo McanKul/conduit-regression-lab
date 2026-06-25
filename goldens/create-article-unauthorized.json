@@ -1,0 +1,7 @@
+{
+  "body": null,
+  "id": "create-article-unauthorized",
+  "method": "POST",
+  "path": "/articles",
+  "status": 401
+}

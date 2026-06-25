@@ -1,0 +1,7 @@
+{
+  "body": null,
+  "id": "delete-article",
+  "method": "DELETE",
+  "path": "/articles/{slug}",
+  "status": 200
+}

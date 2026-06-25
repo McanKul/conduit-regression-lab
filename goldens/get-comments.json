@@ -1,0 +1,22 @@
+{
+  "body": {
+    "comments": [
+      {
+        "author": {
+          "bio": null,
+          "following": false,
+          "image": null,
+          "username": "goldenuser"
+        },
+        "body": "Golden comment",
+        "createdAt": "<masked>",
+        "id": "<masked>",
+        "updatedAt": "<masked>"
+      }
+    ]
+  },
+  "id": "get-comments",
+  "method": "GET",
+  "path": "/articles/{slug}/comments",
+  "status": 200
+}

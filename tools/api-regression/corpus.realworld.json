@@ -1,0 +1,73 @@
+{
+  "_comment": "Controlled happy-path flow. Paths are SPEC-RELATIVE (no /api): the OpenAPI doc declares paths under server url '/api', so corpus path == spec path == impacted path == schemathesis include-path (one convention, exact equality for gating). The /api prefix is carried by --base-url (http://localhost:5000/api). Each request creates/uses its own data, so it is reproducible regardless of random seed data. Vars in {braces} are filled from earlier 'capture' steps. auth: true sends 'Authorization: Token <jwt>'. Extend with more flows over time (e.g. imported from the repo's postman.json).",
+  "auth_scheme": "Token",
+  "requests": [
+    {
+      "id": "register",
+      "method": "POST",
+      "path": "/users",
+      "auth": false,
+      "body": {"user": {"username": "goldenuser", "email": "golden@example.com", "password": "Password123!"}},
+      "capture": {"token": ".user.token"}
+    },
+    {
+      "id": "login",
+      "method": "POST",
+      "path": "/users/login",
+      "auth": false,
+      "body": {"user": {"email": "golden@example.com", "password": "Password123!"}}
+    },
+    {
+      "id": "current-user",
+      "method": "GET",
+      "path": "/user",
+      "auth": true
+    },
+    {
+      "id": "create-article-unauthorized",
+      "method": "POST",
+      "path": "/articles",
+      "auth": false,
+      "body": {"article": {"title": "No Auth", "description": "x", "body": "y", "tagList": []}}
+    },
+    {
+      "id": "create-article",
+      "method": "POST",
+      "path": "/articles",
+      "auth": true,
+      "body": {"article": {"title": "Golden Title", "description": "Golden description", "body": "Golden body", "tagList": ["golden"]}},
+      "capture": {"slug": ".article.slug"}
+    },
+    {
+      "id": "get-article",
+      "method": "GET",
+      "path": "/articles/{slug}",
+      "auth": false
+    },
+    {
+      "id": "add-comment",
+      "method": "POST",
+      "path": "/articles/{slug}/comments",
+      "auth": true,
+      "body": {"comment": {"body": "Golden comment"}}
+    },
+    {
+      "id": "get-comments",
+      "method": "GET",
+      "path": "/articles/{slug}/comments",
+      "auth": false
+    },
+    {
+      "id": "favorite-article",
+      "method": "POST",
+      "path": "/articles/{slug}/favorite",
+      "auth": true
+    },
+    {
+      "id": "delete-article",
+      "method": "DELETE",
+      "path": "/articles/{slug}",
+      "auth": true
+    }
+  ]
+}

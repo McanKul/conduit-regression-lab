@@ -1,0 +1,28 @@
+{
+  "_comment": "Tuned for this repo (Conduit / ASP.NET Core, minimal APIs, clean architecture). Anything matching global_triggers forces the report's advisory `global` flag (-> run full suite nightly). Endpoints are minimal-API `MapGet(\"/articles\", ...)` literals; handlers are reached via interface injection (implements_regex bridges impl -> interface -> endpoint).",
+  "exclude_globs": [
+    "**/obj/**",
+    "**/bin/**",
+    "**/*.Designer.cs",
+    "**/*Tests/**",
+    "**/*.Tests/**"
+  ],
+  "controller_suffix": "Controller",
+  "minimal_api_map_regex": "Map(?:Get|Post|Put|Delete|Patch|Methods)\\s*(?:<[^>]*>)?\\(\\s*\"([^\"]+)\"",
+  "implements_regex": "(?:class|record|struct)\\s+\\w+\\s*(?:<[^>]*>)?\\s*(?:\\([^)]*\\))?\\s*:\\s*([^\\{\\n]+)",
+  "migration_dir_regex": "(^|/)Migrations/",
+  "migration_table_regex": "(?:name|table)\\s*:\\s*\"([^\"]+)\"",
+  "reference_max_hops": 2,
+  "min_type_name_len": 4,
+  "type_name_stoplist": ["Program", "Startup", "Options", "Settings", "Constants", "Extensions", "Result", "Response"],
+  "global_triggers": [
+    "(^|/)Program\\.cs$",
+    "(^|/)Startup\\.cs$",
+    "DbContext\\.cs$",
+    "(^|/)Directory\\.(Build|Packages)\\.props$",
+    "\\.csproj$",
+    "(^|/)Middlewares?/",
+    "Auth\\w*Handler\\.cs$",
+    "Base\\w*Controller\\.cs$"
+  ]
+}

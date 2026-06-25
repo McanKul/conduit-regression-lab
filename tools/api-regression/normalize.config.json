@@ -1,0 +1,6 @@
+{
+  "_comment": "Recursively mask volatile keys (any depth) before locking/diffing a golden, so a re-run on a fresh DB produces a byte-identical body. token=JWT(iat/exp), slug/id=DB-derived, createdAt/updatedAt=timestamps, traceId=per-request ProblemDetails. Everything else (titles, usernames, counts, booleans, sorted tagList) is deterministic and kept as real signal. gate_strip_prefix is applied to BOTH the golden path and the impacted-paths line before matching; '' because corpus paths are already spec-relative.",
+  "mask_keys": ["token", "slug", "id", "createdAt", "updatedAt", "traceId"],
+  "mask_value": "<masked>",
+  "gate_strip_prefix": ""
+}

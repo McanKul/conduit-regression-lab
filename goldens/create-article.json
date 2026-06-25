@@ -1,0 +1,27 @@
+{
+  "body": {
+    "article": {
+      "author": {
+        "bio": null,
+        "following": false,
+        "image": null,
+        "username": "goldenuser"
+      },
+      "body": "Golden body",
+      "createdAt": "<masked>",
+      "description": "Golden description",
+      "favorited": false,
+      "favoritesCount": 0,
+      "slug": "<masked>",
+      "tagList": [
+        "golden"
+      ],
+      "title": "Golden Title",
+      "updatedAt": "<masked>"
+    }
+  },
+  "id": "create-article",
+  "method": "POST",
+  "path": "/articles",
+  "status": 200
+}

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "user": {
+      "bio": null,
+      "email": "golden@example.com",
+      "image": null,
+      "token": "<masked>",
+      "username": "goldenuser"
+    }
+  },
+  "id": "current-user",
+  "method": "GET",
+  "path": "/user",
+  "status": 200
+}

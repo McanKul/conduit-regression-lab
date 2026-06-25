@@ -455,3 +455,8 @@ $RECYCLE.BIN/
 
 reports/
 .sonarqube/
+
+# API regression harness (transient run artifacts; goldens/ IS committed)
+specs/
+schemathesis-report/
+golden-report.json
