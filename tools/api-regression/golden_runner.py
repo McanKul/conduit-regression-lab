@@ -21,6 +21,7 @@ yields a byte-identical body.
 Pure standard library (urllib). No pip install required.
 """
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -144,6 +145,42 @@ def cmd_capture(args, corpus, norm_cfg):
     print(f"captured {len(corpus['requests'])} golden(s) into {out}/")
 
 
+def _pretty(body):
+    return json.dumps(body, indent=2, sort_keys=True, ensure_ascii=False)
+
+
+def build_comment(diffs, missing):
+    """Human 'was -> now' markdown for a PR comment. Empty string if no change."""
+    if not diffs:
+        return ""
+    n = len(diffs)
+    fatal_n = sum(1 for d in diffs if d["impacted"])
+    lines = [
+        "## 🔎 API davranış değişikliği (golden)",
+        "",
+        f"Bu PR **{n} uç noktanın** yanıtını değiştiriyor "
+        f"({fatal_n} tanesi bu PR'da *impacted*). Aşağıda **şuydu → şu oldu**:",
+        "",
+    ]
+    for d in diffs:
+        tag = "🟥 impacted" if d["impacted"] else "🟨 ilgisiz"
+        head = f"### `{d['method']} {d['path']}`  ({d['id']}) — {tag}"
+        lines.append(head)
+        if d["status_changed"]:
+            lines.append(f"- **status:** `{d['expected_status']}` → `{d['actual_status']}`")
+        if d["body_changed"]:
+            before = _pretty(d["before"]).splitlines()
+            after = _pretty(d["after"]).splitlines()
+            udiff = difflib.unified_diff(before, after, "was", "now", lineterm="")
+            lines += ["", "```diff", *list(udiff), "```"]
+        lines.append("")
+    lines += [
+        "> Golden katmanı **advisory**: build'i düşürmez, sadece bu değişimi görünür kılar.",
+        "> Bu değişim **kasıtlıysa**, PR merge edilince `goldens/` otomatik güncellenir (re-bless).",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def cmd_verify(args, corpus, norm_cfg):
     scheme = args.auth_scheme or corpus.get("auth_scheme", "Token")
     keys = set(norm_cfg.get("mask_keys", []))
@@ -168,12 +205,15 @@ def cmd_verify(args, corpus, norm_cfg):
         impacted = gate is None or gate_norm(rq["path"], strip) in gate
         entry = {
             "id": rq["id"],
+            "method": rq["method"],
             "path": rq["path"],
             "impacted": impacted,
             "status_changed": status_changed,
             "expected_status": golden.get("status"),
             "actual_status": status,
             "body_changed": body_changed,
+            "before": golden.get("body"),
+            "after": actual_body,
         }
         diffs.append(entry)
         (fatal if impacted else warnings).append(entry)
@@ -188,6 +228,8 @@ def cmd_verify(args, corpus, norm_cfg):
     }
     if args.report:
         Path(args.report).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if args.comment_out:
+        Path(args.comment_out).write_text(build_comment(diffs, missing), encoding="utf-8")
 
     for w in warnings:
         print(f"  WARN  {w['id']:<28} {w['path']}  (not impacted; status "
@@ -222,6 +264,9 @@ def main():
             p.add_argument("--gate-paths", default=None,
                            help="impacted-paths.txt; diffs outside it are warnings")
             p.add_argument("--report", default=None)
+            p.add_argument("--comment-out", default=None,
+                           help="write a human 'was -> now' markdown body diff "
+                                "for a PR comment (empty if nothing changed)")
 
     args = ap.parse_args()
     corpus = load_json(args.corpus)

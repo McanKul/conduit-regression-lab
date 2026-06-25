@@ -1,0 +1,73 @@
+name: Golden re-bless (post-merge)
+
+# After a merge to main, whatever behaviour shipped IS the new truth: re-capture
+# the golden baseline and commit it back. Developers never run anything locally;
+# the PR's "was -> now" comment (api-regression.yml) is the human review point,
+# and merging accepts it. The [skip ci] + bot-actor guard prevents a loop.
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+concurrency: golden-rebless
+
+jobs:
+  rebless:
+    if: "!contains(github.event.head_commit.message, '[skip ci]') && github.actor != 'github-actions[bot]'"
+    runs-on: ubuntu-latest
+    env:
+      APP_ORIGIN: "http://localhost:5000"
+      API_BASE: "http://localhost:5000/api"
+      SPEC_CANDIDATES: "/api/v1/swagger.json"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Start database
+        run: docker compose -f compose.yaml up -d
+
+      - name: Migrate (db fresh) & run app
+        run: |
+          ( cd tools/Conduit.Tools && dotnet run -- db fresh )
+          ( cd src/Conduit.WebUI \
+            && ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5000 \
+               dotnet run --no-launch-profile > /tmp/app.log 2>&1 & )
+          for i in $(seq 1 90); do
+            curl -fsS "${APP_ORIGIN}${SPEC_CANDIDATES}" -o /dev/null 2>/dev/null && { echo ready; break; }
+            sleep 2
+          done
+
+      - name: Re-capture goldens
+        run: |
+          python3 tools/api-regression/golden_runner.py capture \
+            --corpus tools/api-regression/corpus.realworld.json \
+            --base-url "$API_BASE" \
+            --normalize tools/api-regression/normalize.config.json \
+            --out goldens
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- goldens/; then
+            echo "goldens already current — nothing to re-bless."
+          else
+            git config user.name  'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add goldens
+            git commit -m "chore(golden): auto re-bless after merge [skip ci]"
+            git push
+          fi
+
+      - name: Stop
+        if: always()
+        run: |
+          pkill -f Conduit.WebUI 2>/dev/null || true
+          docker compose -f compose.yaml down -v 2>/dev/null || true

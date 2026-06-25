@@ -121,7 +121,7 @@ jobs:
       # OpenAPI 3.1.1 needs the experimental flag on schemathesis 3.x.
       # Report-only (|| true): without a fuzz baseline it cannot tell a NEW 5xx
       # from a pre-existing spec gap, so it informs (junit artifact) but does not
-      # gate. The hard gates stay strict: oasdiff (breaking) + golden (behaviour).
+      # gate. The ONLY hard gate is oasdiff (breaking); golden is advisory too.
       - name: Schemathesis on impacted endpoints
         run: |
           if [ ! -s specs/impacted-paths.txt ]; then echo "nothing impacted -> skip"; exit 0; fi
@@ -135,8 +135,11 @@ jobs:
             -H "Authorization: $AUTH_SCHEME $API_TOKEN" \
             --checks all --junit-xml schemathesis-report/junit.xml || true
 
-      # ---- Behavioural regression: replay golden corpus, gate on impacted ----
-      - name: Golden replay
+      # ---- Behavioural diff: replay golden corpus, ADVISORY (never blocks) ----
+      # Produces a human "was -> now" body diff. The hard gate is oasdiff
+      # (breaking). Golden only surfaces silent body changes for review; if the
+      # change is intentional, merging auto-re-blesses goldens (golden-rebless.yml).
+      - name: Golden behaviour diff (advisory)
         run: |
           if [ -d goldens ]; then
             python3 tools/api-regression/golden_runner.py verify \
@@ -145,10 +148,33 @@ jobs:
               --normalize tools/api-regression/normalize.config.json \
               --goldens goldens \
               --gate-paths specs/impacted-paths.txt \
-              --report golden-report.json
+              --report golden-report.json \
+              --comment-out golden-comment.md || true
           else
             echo "No goldens/ committed yet. Run capture once and commit it (see GOLDEN.md). Skipping."
           fi
+
+      - name: Post behaviour diff as PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- golden-behaviour-diff -->';
+            let body = '';
+            try { body = fs.readFileSync('golden-comment.md', 'utf8'); } catch (e) {}
+            body = body.trim()
+              ? marker + '\n' + body
+              : marker + '\n✅ Bu PR hiçbir API yanıt gövdesini değiştirmiyor (golden).';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
 
       - name: Stop
         if: always()
@@ -164,3 +190,4 @@ jobs:
             specs/
             schemathesis-report/
             golden-report.json
+            golden-comment.md
