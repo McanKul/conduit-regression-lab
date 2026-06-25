@@ -29,9 +29,13 @@ public class CommandComments(IAppDbContext context, ICurrentUser currentUser, IV
 
         var article = await context.Articles.FindAsync(x => x.Slug == slug, cancellationToken);
 
+        // Internal refactor (signature unchanged, behaviour identical): bind the
+        // body to a local before constructing the entity.
+        var body = newComment.Body;
+
         var comment = new Comment
         {
-            Body = newComment.Body,
+            Body = body,
             Article = article,
             Author = currentUser.User!
         };
