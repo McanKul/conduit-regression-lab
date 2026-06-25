@@ -1,0 +1,79 @@
+name: Golden re-bless (post-merge)
+
+# Gitea Actions port of .github/workflows/golden-rebless.yml.
+# After a merge to main, re-capture the golden baseline and commit it back so the
+# shipped behaviour becomes the new truth. Postgres via `services:` (see
+# api-regression.yml for why); toolchain via mise; push uses the checkout token.
+on:
+  push:
+    branches: [ main ]
+
+concurrency: golden-rebless
+
+env:
+  APP_ORIGIN: "http://localhost:5000"
+  API_BASE: "http://localhost:5000/api"
+  SPEC_CANDIDATES: "/api/v1/swagger.json"
+  ASPNETCORE_ENVIRONMENT: "Development"
+  ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Username=main;Password=main;Database=main;"
+
+jobs:
+  rebless:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: main
+          POSTGRES_PASSWORD: main
+          POSTGRES_DB: main
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: jdx/mise-action@v3
+        with:
+          github_token: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Migrate (db fresh) & run app
+        run: |
+          ( cd tools/Conduit.Tools && dotnet run -- db fresh )
+          ( cd src/Conduit.WebUI \
+            && ASPNETCORE_URLS=http://localhost:5000 \
+               dotnet run --no-launch-profile > /tmp/app.log 2>&1 & )
+          for i in $(seq 1 90); do
+            curl -fsS "${APP_ORIGIN}${SPEC_CANDIDATES}" -o /dev/null 2>/dev/null && { echo ready; break; }
+            sleep 2
+          done
+
+      - name: Re-capture goldens
+        run: |
+          python3 tools/api-regression/golden_runner.py capture \
+            --corpus tools/api-regression/corpus.realworld.json \
+            --base-url "$API_BASE" \
+            --normalize tools/api-regression/normalize.config.json \
+            --out goldens
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- goldens/; then
+            echo "goldens already current - nothing to re-bless."
+          else
+            git config user.name  'gitea-actions'
+            git config user.email 'gitea-actions@noreply.local'
+            git add goldens
+            git commit -m "chore(golden): auto re-bless after merge [skip ci]"
+            # checkout@v6 persists a push token; if main is protected, allow this
+            # actor or push from a PAT with contents:write instead.
+            git push origin HEAD:main
+          fi
+
+      - name: Stop
+        if: always()
+        run: pkill -f Conduit.WebUI 2>/dev/null || true

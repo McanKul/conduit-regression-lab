@@ -1,0 +1,198 @@
+name: API Regression
+
+# Gitea Actions port of .github/workflows/api-regression.yml.
+# Gitea differences handled here:
+#  * Postgres via `services:` (NOT `docker compose`): Gitea runs the job inside a
+#    container, so a compose sibling container is NOT reachable on localhost. The
+#    service is reachable by name `db`, and the connection string is overridden
+#    via env (ConnectionStrings__DefaultConnection) for both the app and tools.
+#  * Toolchain via mise (repo-native, proven by build.yaml) -> .NET 10 from mise.toml.
+#  * PR comment via the Gitea API (python/urllib), not actions/github-script.
+#  * oasdiff via the same action (this instance already resolves GitHub actions).
+# NOTE: Gitea reads BOTH .gitea/workflows AND .github/workflows. To avoid running
+# the regression twice on Gitea, delete .github/workflows/api-regression.yml (and
+# golden-rebless.yml) when this repo lives on Gitea.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+env:
+  APP_ORIGIN: "http://localhost:5000"
+  API_BASE: "http://localhost:5000/api"
+  SPEC_CANDIDATES: "/api/v1/swagger.json"
+  REGISTER_URL: "http://localhost:5000/api/users"
+  AUTH_SCHEME: "Token"
+  ASPNETCORE_ENVIRONMENT: "Development"
+  # Override the appsettings connection: reach the `db` SERVICE by name (env wins
+  # over appsettings.Development.json's localhost:5433). Host-mode runners would
+  # instead use Host=localhost;Port=5432 with a published service port.
+  ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Username=main;Password=main;Database=main;"
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: main
+          POSTGRES_PASSWORD: main
+          POSTGRES_DB: main
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # mise installs the toolchain from mise.toml ([tools] dotnet = "10").
+      - uses: jdx/mise-action@v3
+        with:
+          github_token: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Write spec fetcher
+        run: |
+          cat > /tmp/fetch-spec.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -uo pipefail
+          out="$1"
+          for i in $(seq 1 90); do
+            for path in $SPEC_CANDIDATES; do
+              if curl -fsS "${APP_ORIGIN}${path}" -o "$out" 2>/dev/null; then
+                echo "spec fetched from ${path}"; exit 0
+              fi
+            done
+            sleep 2
+          done
+          echo "spec not reachable on any candidate path"; exit 1
+          EOF
+          chmod +x /tmp/fetch-spec.sh
+
+      - name: Base spec
+        run: |
+          mkdir -p specs
+          git worktree add ../base "origin/${{ github.base_ref }}"
+          ( cd ../base/src/Conduit.WebUI \
+            && ASPNETCORE_URLS=http://localhost:5000 \
+               dotnet run --no-launch-profile > /tmp/base.log 2>&1 & )
+          /tmp/fetch-spec.sh specs/base.json || { echo '--- base log ---'; cat /tmp/base.log; exit 1; }
+          pkill -f Conduit.WebUI 2>/dev/null || true
+          sleep 5
+
+      - name: Migrate (db fresh) & run PR app
+        run: |
+          ( cd tools/Conduit.Tools && dotnet run -- db fresh )
+          ( cd src/Conduit.WebUI \
+            && ASPNETCORE_URLS=http://localhost:5000 \
+               dotnet run --no-launch-profile > /tmp/pr.log 2>&1 & )
+          /tmp/fetch-spec.sh specs/revision.json || { echo '--- pr log ---'; cat /tmp/pr.log; exit 1; }
+
+      - name: Resolve impacted endpoints
+        run: |
+          python3 tools/api-regression/impact_resolver.py \
+            --base "origin/${{ github.base_ref }}" --head HEAD \
+            --spec specs/revision.json --base-spec specs/base.json \
+            --config tools/api-regression/impact.config.json --out-dir specs
+          echo "Impacted:"; cat specs/impacted-paths.txt || true
+
+      # Only hard gate. If this action does not resolve on your Gitea, swap for:
+      #   docker run --rm -v "$(pwd)/specs:/specs" tufin/oasdiff \
+      #     breaking /specs/base.json /specs/revision.json --fail-on ERR
+      - name: Breaking-change gate
+        uses: oasdiff/oasdiff-action/breaking@v0
+        with:
+          base: specs/base.json
+          revision: specs/revision.json
+          fail-on: ERR
+
+      - name: Register & get token
+        run: |
+          email="regr_$(date +%s)_$RANDOM@example.com"
+          body="{\"user\":{\"username\":\"regr_$RANDOM\",\"email\":\"$email\",\"password\":\"Password123!\"}}"
+          TOKEN=$(curl -fsS -X POST "$REGISTER_URL" -H 'Content-Type: application/json' -d "$body" | jq -r '.user.token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "registration failed"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          echo "API_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Schemathesis on impacted endpoints
+        run: |
+          if [ ! -s specs/impacted-paths.txt ]; then echo "nothing impacted -> skip"; exit 0; fi
+          mkdir -p schemathesis-report
+          pip install 'schemathesis<4'
+          ARGS=()
+          while IFS= read -r p; do [ -n "$p" ] && ARGS+=( --include-path "/api${p}" ); done < specs/impacted-paths.txt
+          if [ ${#ARGS[@]} -eq 0 ]; then echo "nothing to test"; exit 0; fi
+          schemathesis run specs/revision.json --base-url "$API_BASE" "${ARGS[@]}" \
+            --experimental=openapi-3.1 \
+            -H "Authorization: $AUTH_SCHEME $API_TOKEN" \
+            --checks all --junit-xml schemathesis-report/junit.xml || true
+
+      - name: Golden behaviour diff (advisory)
+        run: |
+          if [ -d goldens ]; then
+            python3 tools/api-regression/golden_runner.py verify \
+              --corpus tools/api-regression/corpus.realworld.json \
+              --base-url "$API_BASE" \
+              --normalize tools/api-regression/normalize.config.json \
+              --goldens goldens \
+              --gate-paths specs/impacted-paths.txt \
+              --report golden-report.json \
+              --comment-out golden-comment.md || true
+          else
+            echo "No goldens/ committed yet (see GOLDEN.md). Skipping."
+          fi
+
+      - name: Post behaviour diff as PR comment
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_INDEX: ${{ github.event.pull_request.number }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          api = os.environ.get("GITHUB_API_URL") or (os.environ["GITHUB_SERVER_URL"] + "/api/v1")
+          repo = os.environ["GITHUB_REPOSITORY"]
+          idx = os.environ["PR_INDEX"]
+          token = os.environ["GITEA_TOKEN"]
+          marker = "<!-- golden-behaviour-diff -->"
+          try:
+              body = open("golden-comment.md", encoding="utf-8").read().strip()
+          except FileNotFoundError:
+              body = ""
+          body = (marker + "\n" + body) if body else (
+              marker + "\nBu PR hicbir API yanit govdesini degistirmiyor (golden).")
+          def call(url, method="GET", data=None):
+              req = urllib.request.Request(
+                  url, method=method,
+                  headers={"Authorization": "token " + token, "Content-Type": "application/json"},
+                  data=json.dumps(data).encode() if data is not None else None)
+              with urllib.request.urlopen(req) as r:
+                  raw = r.read().decode()
+                  return json.loads(raw) if raw else None
+          base = api + "/repos/" + repo + "/issues/" + str(idx) + "/comments"
+          existing = next((c for c in (call(base) or []) if marker in (c.get("body") or "")), None)
+          if existing:
+              call(api + "/repos/" + repo + "/issues/comments/" + str(existing["id"]), "PATCH", {"body": body})
+          else:
+              call(base, "POST", {"body": body})
+          print("comment upserted")
+          PY
+
+      - name: Stop
+        if: always()
+        run: pkill -f Conduit.WebUI 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-artifacts
+          path: |
+            specs/
+            schemathesis-report/
+            golden-report.json
+            golden-comment.md
