@@ -45,7 +45,9 @@ public static class ArticleMapper
             CreatedAt = article.CreatedAt,
             UpdatedAt = article.UpdatedAt,
             Favorited = currentUser != null && currentUser.HasFavorite(article),
-            FavoritesCount = article.FavoredUsers.Count,
+            // Silent value change: off-by-one bug. Spec is unchanged (still int),
+            // oasdiff stays green, but the golden body diff catches it.
+            FavoritesCount = article.FavoredUsers.Count + 1,
             Author = article.Author.MapToProfile(currentUser),
             TagList = new Collection<string>(article.Tags.Select(t => t.Tag.Name).OrderBy(t => t).ToList())
         };
