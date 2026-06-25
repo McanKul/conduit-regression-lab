@@ -75,10 +75,15 @@ jobs:
           pkill -f Conduit.WebUI 2>/dev/null || true
           sleep 5
 
-      # ---- PR branch: migrate+seed (ephemeral DB) then run; keep up for fuzz --
-      - name: Seed & run PR app
+      # ---- PR branch: migrate + wipe (ephemeral DB) then run; keep up for fuzz -
+      # Use `db fresh` (migrate + truncate), NOT `db seed`: the app's random
+      # faker seeder occasionally inserts a duplicate tag name (23505 on the
+      # IX_Tags_Name unique index) -> flaky CI. The golden corpus self-generates
+      # its data and the fuzz layer generates its own, so a clean migrated DB is
+      # both sufficient and fully deterministic. (App source is left untouched.)
+      - name: Migrate & run PR app
         run: |
-          ( cd tools/Conduit.Tools && dotnet run -- db seed )
+          ( cd tools/Conduit.Tools && dotnet run -- db fresh )
           ( cd src/Conduit.WebUI \
             && ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5000 \
                dotnet run --no-launch-profile > /tmp/pr.log 2>&1 & )
