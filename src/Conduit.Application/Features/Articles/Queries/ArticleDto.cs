@@ -16,6 +16,8 @@ public class ArticleDto
 
     public required string Body { get; set; }
 
+    public string? Subtitle { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }
