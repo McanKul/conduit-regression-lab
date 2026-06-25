@@ -1,0 +1,21 @@
+# Self-contained multi-stage build — no local .NET 10 SDK required.
+# Builds and publishes both the WebUI and the seeding Tools inside the SDK image.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /source
+
+# Copy everything and restore against the committed lock files.
+COPY . .
+RUN dotnet restore src/Conduit.WebUI/Conduit.WebUI.csproj
+RUN dotnet restore tools/Conduit.Tools/Conduit.Tools.csproj
+
+RUN dotnet publish src/Conduit.WebUI/Conduit.WebUI.csproj -c Release -o /publish/app --no-restore
+RUN dotnet publish tools/Conduit.Tools/Conduit.Tools.csproj -c Release -o /publish/tools --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /publish/app /app
+COPY --from=build /publish/tools /tools
+
+ENV ASPNETCORE_URLS=http://+:8080
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Conduit.WebUI.dll"]

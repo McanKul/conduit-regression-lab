@@ -1,0 +1,17 @@
+# Local-only override: builds the app from source inside Docker and wires it to
+# the `db` service from compose.yaml. Run together:
+#   docker compose -f compose.yaml -f compose.app.yaml up -d --build
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    depends_on:
+      - db
+    environment:
+      # Development triggers the automatic EF Core migration on startup.
+      ASPNETCORE_ENVIRONMENT: Development
+      # Overrides appsettings — talks to the `db` service on the compose network.
+      ConnectionStrings__DefaultConnection: "Host=db;Port=5432;Username=main;Password=main;Database=main;"
+    ports:
+      - "5000:8080"
