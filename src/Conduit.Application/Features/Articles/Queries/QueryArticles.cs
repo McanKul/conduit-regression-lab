@@ -22,7 +22,7 @@ public class QueryArticles(IAppDbContext context, ICurrentUser currentUser) : IQ
             .FilterByAuthor(request.Author)
             .FilterByTag(request.Tag)
             .FilterByFavoritedBy(request.Favorited)
-            .OrderByDescending(x => x.Id)
+            .OrderBy(x => x.Id)
             .PaginateAsync(a => a.Map(currentUser.User), request, cancellationToken);
 
         return new MultipleArticlesResponse(articles.Items, articles.Total);
@@ -37,7 +37,7 @@ public class QueryArticles(IAppDbContext context, ICurrentUser currentUser) : IQ
             .Include(a => a.FavoredUsers)
             .AsSplitQuery()
             .HasAuthorsFollowedBy(currentUser.User!)
-            .OrderByDescending(x => x.Id)
+            .OrderBy(x => x.Id)
             .PaginateAsync(a => a.Map(currentUser.User), request, cancellationToken);
 
         return new MultipleArticlesResponse(articles.Items, articles.Total);
