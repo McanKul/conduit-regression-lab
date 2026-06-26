@@ -31,6 +31,7 @@ public class Article : IAuditableEntity
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }
+    public int ViewCount { get; set; }
 
     public virtual IReadOnlyCollection<Comment> Comments => _comments;
 
