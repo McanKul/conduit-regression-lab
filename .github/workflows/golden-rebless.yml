@@ -1,15 +1,15 @@
 name: Golden re-bless (post-merge)
 
-# After a merge to main, whatever behaviour shipped IS the new truth: re-capture
-# the golden baseline and commit it back. Developers never run anything locally;
-# the PR's "was -> now" comment (api-regression.yml) is the human review point,
-# and merging accepts it. The [skip ci] + bot-actor guard prevents a loop.
+# After a merge to main, re-capture the golden baseline and VERIFY it matches the
+# committed goldens. It no longer rewrites main: any drift fails the job (a loud
+# signal that something shipped without an in-PR re-bless) and uploads the
+# re-captured goldens as an artifact for a reviewed follow-up re-bless PR.
 on:
   push:
     branches: [ main ]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency: golden-rebless
 
@@ -32,6 +32,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install regression CLI
+        run: python3 -m pip install ./tools/api-regression
+
       - name: Start database
         run: docker compose -f compose.yaml up -d
 
@@ -48,23 +51,33 @@ jobs:
 
       - name: Re-capture goldens
         run: |
-          python3 tools/api-regression/golden_runner.py capture \
+          dotnet-api-regression golden capture \
             --corpus tools/api-regression/corpus.realworld.json \
             --base-url "$API_BASE" \
             --normalize tools/api-regression/normalize.config.json \
             --out goldens
 
-      - name: Commit if changed
+      # Drift = a merged change altered a happy-path response without an in-PR
+      # re-bless. The PR golden gate makes this rare; when it happens it is a real
+      # signal (resolver gap or non-determinism), so FAIL loudly instead of
+      # silently rewriting main. The re-captured goldens are uploaded for review.
+      - name: Verify goldens current (no silent drift)
         run: |
           if git diff --quiet -- goldens/; then
-            echo "goldens already current — nothing to re-bless."
+            echo "goldens already current — shipped behaviour matches the baseline."
           else
-            git config user.name  'github-actions[bot]'
-            git config user.email 'github-actions[bot]@users.noreply.github.com'
-            git add goldens
-            git commit -m "chore(golden): auto re-bless after merge [skip ci]"
-            git push
+            echo "::error::Goldens drifted: a merged change altered a happy-path"
+            echo "::error::response without an in-PR re-bless. Review the diff, then"
+            echo "::error::commit the re-captured goldens via a follow-up PR (GOLDEN.md)."
+            git --no-pager diff -- goldens/ || true
+            exit 1
           fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rebless-goldens
+          path: goldens/
 
       - name: Stop
         if: always()

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dotnet-api-regression"
+version = "0.2.0"
+description = "Impact-based OpenAPI and golden regression tooling for ASP.NET Core APIs"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+dotnet-api-regression = "api_regression:main"
+
+[tool.setuptools]
+py-modules = [
+  "api_regression",
+  "golden_runner",
+  "impact_resolver",
+  "openapi_capture",
+]

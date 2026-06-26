@@ -175,8 +175,11 @@ def build_comment(diffs, missing):
             lines += ["", "```diff", *list(udiff), "```"]
         lines.append("")
     lines += [
-        "> Golden katmanı **advisory**: build'i düşürmez, sadece bu değişimi görünür kılar.",
-        "> Bu değişim **kasıtlıysa**, PR merge edilince `goldens/` otomatik güncellenir (re-bless).",
+        "> Golden katmanı bu PR'ı **bloklar**: kilitli happy-path yanıtları değişti.",
+        "> 🟥 *impacted* = bu PR'ın etkilediği uçlar; 🟨 *ilgisiz* = resolver işaretlemedi "
+        "ama yine de değişti (paylaşılan değişim veya resolver boşluğu sinyali).",
+        "> Değişim **kasıtlıysa**, `goldens/`'ı bu PR içinde yeniden yakalayıp commit'le "
+        "(re-bless — bkz. GOLDEN.md).",
     ]
     return "\n".join(lines) + "\n"
 

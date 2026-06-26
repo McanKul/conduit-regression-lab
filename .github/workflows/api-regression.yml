@@ -14,8 +14,6 @@ env:
   # So the spec base that actually hits endpoints is origin + /api.
   APP_ORIGIN: "http://localhost:5000"
   API_BASE: "http://localhost:5000/api"
-  # MapOpenApi("/api/v1/{documentName}.json"), document name = "swagger".
-  SPEC_CANDIDATES: "/api/v1/swagger.json"
   # RealWorld registers at POST /api/users and returns .user.token; the scheme
   # is "Token" (NOT Bearer) -> Authorization: Token <jwt>.
   REGISTER_URL: "http://localhost:5000/api/users"
@@ -37,28 +35,18 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install regression CLI
+        run: python3 -m pip install ./tools/api-regression
+
+      - name: Test regression CLI
+        run: python3 -m unittest discover -s tools/api-regression -p 'test_*.py'
+
+      - name: Test Roslyn analyzer
+        run: dotnet run --project tools/DotnetApiRegression.Analyzer.Tests --nologo
+
       # Postgres (dev DB on :5433 + integration-test DB on :5434) from the repo's compose.
       - name: Start databases
         run: docker compose -f compose.yaml up -d
-
-      # Reusable spec fetcher: poll until a candidate path answers, save it.
-      - name: Write spec fetcher
-        run: |
-          cat > /tmp/fetch-spec.sh <<'EOF'
-          #!/usr/bin/env bash
-          set -uo pipefail
-          out="$1"
-          for i in $(seq 1 90); do
-            for path in $SPEC_CANDIDATES; do
-              if curl -fsS "${APP_ORIGIN}${path}" -o "$out" 2>/dev/null; then
-                echo "spec fetched from ${path}"; exit 0
-              fi
-            done
-            sleep 2
-          done
-          echo "spec not reachable on any candidate path"; exit 1
-          EOF
-          chmod +x /tmp/fetch-spec.sh
 
       # ---- BASE branch spec: run base app from a worktree, fetch, stop --------
       # Run from the project dir with --no-launch-profile so the content root
@@ -71,7 +59,16 @@ jobs:
           ( cd ../base/src/Conduit.WebUI \
             && ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5000 \
                dotnet run --no-launch-profile > /tmp/base.log 2>&1 & )
-          /tmp/fetch-spec.sh specs/base.json || { echo '--- base log ---'; cat /tmp/base.log; exit 1; }
+          dotnet-api-regression openapi capture \
+            --output specs/base.json \
+            --url "${APP_ORIGIN}/api/v1/swagger.json" --wait-seconds 180 \
+            --search-root ../base \
+            --project ../base/src/Conduit.WebUI/Conduit.WebUI.csproj \
+            || { echo '--- base log ---'; cat /tmp/base.log; exit 1; }
+          dotnet-api-regression analyze \
+            --root ../base \
+            --project src/Conduit.WebUI/Conduit.WebUI.csproj \
+            --output "$(pwd)/specs/base-semantic-index.json"
           pkill -f Conduit.WebUI 2>/dev/null || true
           sleep 5
 
@@ -87,14 +84,27 @@ jobs:
           ( cd src/Conduit.WebUI \
             && ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5000 \
                dotnet run --no-launch-profile > /tmp/pr.log 2>&1 & )
-          /tmp/fetch-spec.sh specs/revision.json || { echo '--- pr log ---'; cat /tmp/pr.log; exit 1; }
+          dotnet-api-regression openapi capture \
+            --output specs/revision.json \
+            --url "${APP_ORIGIN}/api/v1/swagger.json" --wait-seconds 180 \
+            --search-root . \
+            --project src/Conduit.WebUI/Conduit.WebUI.csproj \
+            || { echo '--- pr log ---'; cat /tmp/pr.log; exit 1; }
+
+      - name: Build Roslyn semantic index
+        run: |
+          dotnet-api-regression analyze \
+            --root . --project src/Conduit.WebUI/Conduit.WebUI.csproj \
+            --output specs/revision-semantic-index.json
 
       # ---- Impact = spec-diff U source-impact U migration-impact -------------
       - name: Resolve impacted endpoints
         run: |
-          python3 tools/api-regression/impact_resolver.py \
+          dotnet-api-regression impact \
             --base "origin/${{ github.base_ref }}" --head HEAD \
             --spec specs/revision.json --base-spec specs/base.json \
+            --semantic-index specs/revision-semantic-index.json \
+            --base-semantic-index specs/base-semantic-index.json \
             --config tools/api-regression/impact.config.json --out-dir specs
           echo "Impacted:"; cat specs/impacted-paths.txt || true
 
@@ -105,44 +115,12 @@ jobs:
           revision: specs/revision.json
           fail-on: ERR
 
-      # ---- Auth: register a throwaway user, grab its token -------------------
-      - name: Register & get token
-        run: |
-          email="regr_$(date +%s)_$RANDOM@example.com"
-          body="{\"user\":{\"username\":\"regr_$RANDOM\",\"email\":\"$email\",\"password\":\"Password123!\"}}"
-          TOKEN=$(curl -fsS -X POST "$REGISTER_URL" -H 'Content-Type: application/json' -d "$body" | jq -r '.user.token')
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "registration failed"; exit 1; fi
-          echo "::add-mask::$TOKEN"
-          echo "API_TOKEN=$TOKEN" >> "$GITHUB_ENV"
-
-      # ---- Contract fuzz: only impacted endpoints ---------------------------
-      # impacted-paths are spec-relative (/articles); schemathesis matches
-      # --include-path against the server-prefixed full path, so prepend /api.
-      # OpenAPI 3.1.1 needs the experimental flag on schemathesis 3.x.
-      # Report-only (|| true): without a fuzz baseline it cannot tell a NEW 5xx
-      # from a pre-existing spec gap, so it informs (junit artifact) but does not
-      # gate. The ONLY hard gate is oasdiff (breaking); golden is advisory too.
-      - name: Schemathesis on impacted endpoints
-        run: |
-          if [ ! -s specs/impacted-paths.txt ]; then echo "nothing impacted -> skip"; exit 0; fi
-          mkdir -p schemathesis-report
-          pip install 'schemathesis<4'
-          ARGS=()
-          while IFS= read -r p; do [ -n "$p" ] && ARGS+=( --include-path "/api${p}" ); done < specs/impacted-paths.txt
-          if [ ${#ARGS[@]} -eq 0 ]; then echo "nothing to test"; exit 0; fi
-          schemathesis run specs/revision.json --base-url "$API_BASE" "${ARGS[@]}" \
-            --experimental=openapi-3.1 \
-            -H "Authorization: $AUTH_SCHEME $API_TOKEN" \
-            --checks all --junit-xml schemathesis-report/junit.xml || true
-
-      # ---- Behavioural diff: replay golden corpus, ADVISORY (never blocks) ----
-      # Produces a human "was -> now" body diff. The hard gate is oasdiff
-      # (breaking). Golden only surfaces silent body changes for review; if the
-      # change is intentional, merging auto-re-blesses goldens (golden-rebless.yml).
-      - name: Golden behaviour diff (advisory)
+      # Golden replay runs BEFORE schemathesis so the corpus hits a clean,
+      # un-fuzzed DB (schemathesis mutates it) -> deterministic, flake-free gate.
+      - name: Golden behaviour diff
         run: |
           if [ -d goldens ]; then
-            python3 tools/api-regression/golden_runner.py verify \
+            dotnet-api-regression golden verify \
               --corpus tools/api-regression/corpus.realworld.json \
               --base-url "$API_BASE" \
               --normalize tools/api-regression/normalize.config.json \
@@ -175,6 +153,66 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+      # ---- Auth: register a throwaway user, grab its token -------------------
+      - name: Register & get token
+        run: |
+          email="regr_$(date +%s)_$RANDOM@example.com"
+          body="{\"user\":{\"username\":\"regr_$RANDOM\",\"email\":\"$email\",\"password\":\"Password123!\"}}"
+          TOKEN=$(curl -fsS -X POST "$REGISTER_URL" -H 'Content-Type: application/json' -d "$body" | jq -r '.user.token')
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "registration failed"; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          echo "API_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      # ---- Contract fuzz: only impacted endpoints ---------------------------
+      # impacted-paths are spec-relative (/articles); schemathesis matches
+      # --include-path against the server-prefixed full path, so prepend /api.
+      # OpenAPI 3.1.1 needs the experimental flag on schemathesis 3.x.
+      # Report-only (|| true): without a fuzz baseline it cannot tell a NEW 5xx
+      # from a pre-existing spec gap, so it informs (junit artifact) but does not
+      # gate. The ONLY hard gate is oasdiff (breaking); golden is advisory too.
+      - name: Schemathesis on impacted endpoints
+        run: |
+          if [ ! -s specs/impacted-paths.txt ]; then echo "nothing impacted -> skip"; exit 0; fi
+          mkdir -p schemathesis-report
+          pip install 'schemathesis<4'
+          ARGS=()
+          while IFS= read -r p; do [ -n "$p" ] && ARGS+=( --include-path "/api${p}" ); done < specs/impacted-paths.txt
+          if [ ${#ARGS[@]} -eq 0 ]; then echo "nothing to test"; exit 0; fi
+          schemathesis run specs/revision.json --base-url "$API_BASE" "${ARGS[@]}" \
+            --experimental=openapi-3.1 \
+            -H "Authorization: $AUTH_SCHEME $API_TOKEN" \
+            --checks all --junit-xml schemathesis-report/junit.xml || true
+
+      # ---- Behavioural gate: replay golden corpus, BLOCK on any change -------
+      # Golden already ran on a clean DB above (before the fuzz). Any change to
+      # the locked happy-path responses fails the PR; re-bless in-PR if intended.
+      - name: Golden gate (fail on any happy-path behaviour change)
+        if: always()
+        run: |
+          if [ ! -f golden-report.json ]; then
+            echo "No golden report (no goldens/ committed yet) — golden gate skipped."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, sys
+          report = json.load(open("golden-report.json"))
+          diffs = report.get("diffs", [])
+          if not diffs:
+              print("golden gate: locked happy-path corpus unchanged.")
+              sys.exit(0)
+          fatal = report.get("fatal", [])
+          warnings = report.get("warnings", [])
+          print(f"::error::Golden gate: {len(diffs)} happy-path response(s) changed "
+                f"({len(fatal)} impacted, {len(warnings)} other). If intentional, "
+                f"re-bless goldens in THIS PR (see GOLDEN.md).")
+          for d in diffs:
+              tag = "impacted" if d["impacted"] else "other"
+              print(f"  - [{tag}] {d['method']} {d['path']} ({d['id']}): "
+                    f"status {d['expected_status']}->{d['actual_status']}, "
+                    f"body_changed={d['body_changed']}")
+          sys.exit(1)
+          PY
 
       - name: Stop
         if: always()
