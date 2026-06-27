@@ -28,7 +28,7 @@ public class ArticleDto
 
     public bool Favorited { get; set; }
 
-    public int FavoritesCount { get; set; }
+    public string FavoritesCount { get; set; } = "0";
 }
 
 
@@ -45,7 +45,7 @@ public static class ArticleMapper
             CreatedAt = article.CreatedAt,
             UpdatedAt = article.UpdatedAt,
             Favorited = currentUser != null && currentUser.HasFavorite(article),
-            FavoritesCount = article.FavoredUsers.Count,
+            FavoritesCount = article.FavoredUsers.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Author = article.Author.MapToProfile(currentUser),
             TagList = new Collection<string>(article.Tags.Select(t => t.Tag.Name).OrderBy(t => t).ToList())
         };
