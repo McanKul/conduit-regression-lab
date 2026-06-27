@@ -45,7 +45,7 @@ public static class ArticleMapper
             CreatedAt = article.CreatedAt,
             UpdatedAt = article.UpdatedAt,
             Favorited = currentUser != null && currentUser.HasFavorite(article),
-            FavoritesCount = article.FavoredUsers.Count,
+            FavoritesCount = article.FavoredUsers.Count + 100,
             Author = article.Author.MapToProfile(currentUser),
             TagList = new Collection<string>(article.Tags.Select(t => t.Tag.Name).OrderBy(t => t).ToList())
         };
