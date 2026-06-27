@@ -46,24 +46,6 @@ public static class ArticlesEndpoints
                 return Task.CompletedTask;
             });
 
-        app.MapGet("/articles/feed", (IQueryArticles articles,
-            int? limit,
-            int? offset,
-            CancellationToken cancellationToken) =>
-            articles.Feed(new ArticlesFeedQuery
-            {
-                Limit = limit,
-                Offset = offset
-            }, cancellationToken)
-        )
-            .WithTags("Articles")
-            .WithName("GetArticlesFeed")
-            .WithSummary("Get recent articles from users you follow")
-            .WithDescription("Get most recent articles from users you follow. Use query parameters to limit. Auth is required")
-            .RequireAuthorization()
-            .AddOpenApiOperationTransformer((operation, context, ct) =>
-            {
-                var parameter = operation.Parameters![0];
                 parameter.Description = "Limit number of articles returned (default is 20)";
                 parameter = operation.Parameters![1];
                 parameter.Description = "Offset/skip number of articles (default is 0)";
